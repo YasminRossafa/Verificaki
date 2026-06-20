@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { verificarNoticia } from "./api/verificar";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -66,6 +67,7 @@ const KEYFRAMES = `
 @keyframes vk-blink{0%,100%{opacity:1;}50%{opacity:.3;}}
 @keyframes vk-spin{to{transform:rotate(360deg);}}
 @keyframes vk-slideup{from{transform:translateY(26px);}to{transform:translateY(0);}}
+@keyframes vk-expand{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:translateY(0);}}
 body{font-family:'Source Sans 3',system-ui,sans-serif;}
 ::selection{background:#cfe0fb;}
 `;
@@ -81,6 +83,10 @@ function Verificaki() {
   const [loadingStep, setLoadingStep] = useState(0);
   const [errorType, setErrorType] = useState<InputType>("link");
   const [install, setInstall] = useState<InstallState>("hidden");
+  const [imageData, setImageData] = useState("");
+  const [summary, setSummary] = useState("");
+  const [sources, setSources] = useState<Array<{ title: string; url: string }>>([]);
+  const [showAllSources, setShowAllSources] = useState(false);
 
   const timers = useRef<{ step?: number; done?: number; gauge?: number; raf?: number; fallback?: number; install?: number }>({});
 
@@ -105,16 +111,19 @@ function Verificaki() {
     };
   }, []);
 
-  const setType = (t: InputType) => { setInputType(t); setInputValue(""); setImageName(""); };
+  const setType = (t: InputType) => { setInputType(t); setInputValue(""); setImageName(""); setImageData(""); };
 
   const goHome = () => {
     clearTimers();
-    setScreen("home"); setInputValue(""); setImageName(""); setScore(0); setDisplayScore(0); setGaugeScore(0); setLoadingStep(0);
+    setScreen("home"); setInputValue(""); setImageName(""); setImageData(""); setScore(0); setDisplayScore(0); setGaugeScore(0); setLoadingStep(0); setSummary(""); setSources([]); setShowAllSources(false);
   };
 
   const showError = (type: InputType) => { setErrorType(type); setScreen("error"); };
 
-  const toResult = (finalScore: number) => {
+  const toResult = (finalScore: number, finalSummary: string, finalSources: Array<{ title: string; url: string }>) => {
+    setSummary(finalSummary);
+    setSources(finalSources);
+    setShowAllSources(false);
     setScreen("result");
     setScore(finalScore);
     setDisplayScore(0);
@@ -132,17 +141,26 @@ function Verificaki() {
     timers.current.fallback = window.setTimeout(() => { setDisplayScore(finalScore); setGaugeScore(finalScore); }, 1700);
   };
 
-  const startLoading = () => {
+  const startLoading = async () => {
     clearTimers();
     setScreen("loading"); setLoadingStep(0);
     timers.current.step = window.setInterval(() => {
       setLoadingStep((prev) => (prev >= 3 ? prev : prev + 1));
     }, 850);
-    timers.current.done = window.setTimeout(() => {
+    try {
+      const result = await verificarNoticia({
+        data: {
+          inputType,
+          inputValue: inputType === 'image' ? imageData : inputValue,
+        },
+      });
       clearTimers();
-      const s = 38 + Math.floor(Math.random() * 58);
-      toResult(s);
-    }, 3100);
+      toResult(result.score, result.summary, result.sources);
+    } catch (error) {
+      console.error("Verificar server function error:", error);
+      clearTimers();
+      showError(inputType);
+    }
   };
 
   const verify = () => {
@@ -179,26 +197,6 @@ function Verificaki() {
 
   const lsLabels = ["Verificando fontes", "Cruzando dados", "Avaliando credibilidade"];
   const progressWidth = Math.min(96, 12 + loadingStep * 28) + "%";
-
-  const relMap = {
-    green: { dot: "#34A853", halo: "#E6F4EA", relLabel: "Confiável" },
-    amber: { dot: "#E0900A", halo: "#FEF6DC", relLabel: "Parcial" },
-    red: { dot: "#EA4335", halo: "#FCE8E6", relLabel: "Contesta" },
-  } as const;
-  type Rel = keyof typeof relMap;
-  let srcDef: [string, Rel][];
-  if (score <= 45) srcDef = [["Agência Lupa", "red"], ["Aos Fatos", "red"], ["Comprova", "amber"], ["Reuters Fact Check", "red"], ["AFP Checamos", "amber"]];
-  else if (score <= 75) srcDef = [["Agência Lupa", "green"], ["Aos Fatos", "amber"], ["G1", "green"], ["Comprova", "amber"], ["BBC Brasil", "green"]];
-  else srcDef = [["Agência Lupa", "green"], ["Aos Fatos", "green"], ["G1", "green"], ["BBC Brasil", "green"], ["Reuters", "green"]];
-  const sources = srcDef.map(([name, rel]) => ({ name, url: "#fonte", ...relMap[rel] }));
-
-  const n = 8 + (score % 7);
-  const summary =
-    score <= 45
-      ? `Esta notícia apresenta fortes sinais de desinformação e contradiz ${n} fontes verificadas. Recomendamos não compartilhar.`
-      : score <= 75
-      ? "Encontramos informações divergentes entre as fontes. Há elementos verdadeiros, mas também imprecisões — confira antes de compartilhar."
-      : `Esta notícia foi considerada confiável com base em ${n} fontes verificadas que confirmam as informações apresentadas.`;
 
   const errMsgs: Record<InputType, string> = {
     image: "Não foi possível reconhecer a imagem. Tente enviar uma imagem mais nítida ou com texto legível.",
@@ -270,7 +268,7 @@ function Verificaki() {
                   <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#1A73E8" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M17 8l-5-5-5 5" /><path d="M12 3v13" /></svg>
                   <span style={{ fontSize: 15.5, fontWeight: 600, color: "#0E2A47" }}>{imageName || "Arraste uma imagem ou clique para enviar"}</span>
                   <span style={{ fontSize: 13, color: "#80868B" }}>PNG, JPG ou prints de tela · até 10MB</span>
-                  <input type="file" accept="image/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) setImageName(f.name); }} style={{ display: "none" }} />
+                  <input type="file" accept="image/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) { setImageName(f.name); const reader = new FileReader(); reader.onload = (ev) => setImageData(ev.target?.result as string ?? ""); reader.readAsDataURL(f); } }} style={{ display: "none" }} />
                 </label>
               )}
 
@@ -385,8 +383,10 @@ function Verificaki() {
 
               <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
                 <div style={{ background: "#fff", border: "1px solid #E7EAEF", borderRadius: 18, padding: "22px 24px" }}>
-                  <h2 style={{ fontFamily: "'Source Serif 4',serif", fontSize: 20, fontWeight: 600, color: "#0E2A47", margin: "0 0 9px" }}>Resumo da análise</h2>
-                  <p style={{ fontSize: 15.5, lineHeight: 1.6, color: "#3c4043", margin: 0 }}>{summary}</p>
+                  <h2 style={{ fontFamily: "'Source Serif 4',serif", fontSize: 20, fontWeight: 600, color: "#0E2A47", margin: "0 0 12px" }}>Resumo da análise</h2>
+                  {summary.split("\n").filter(Boolean).map((para, i) => (
+                    <p key={i} style={{ fontSize: 15.5, lineHeight: 1.65, color: "#3c4043", margin: i === 0 ? 0 : "10px 0 0" }}>{para}</p>
+                  ))}
                 </div>
 
                 <div style={{ background: "#fff", border: "1px solid #E7EAEF", borderRadius: 18, padding: "22px 24px" }}>
@@ -395,15 +395,35 @@ function Verificaki() {
                     <h2 style={{ fontSize: 16, fontWeight: 700, color: "#0E2A47", margin: 0 }}>Fontes consultadas</h2>
                   </div>
                   <div style={{ display: "flex", flexDirection: "column" }}>
-                    {sources.map((src, i) => (
-                      <a key={i} href={src.url} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 0", borderTop: "1px solid #F1F4F8", textDecoration: "none" }}>
-                        <span style={{ width: 9, height: 9, flex: "none", borderRadius: "50%", background: src.dot, boxShadow: `0 0 0 3px ${src.halo}` }} />
-                        <span style={{ flex: 1, fontSize: 15, fontWeight: 600, color: "#1F2A37" }}>{src.name}</span>
-                        <span style={{ fontSize: 12.5, color: src.dot, fontWeight: 600 }}>{src.relLabel}</span>
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#bdc1c6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 17 17 7M9 7h8v8" /></svg>
+                    {sources.slice(0, 3).map((src, i) => (
+                      <a key={i} href={src.url} target="_blank" rel="noopener noreferrer" style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 0", borderTop: i === 0 ? "none" : "1px solid #F1F4F8", textDecoration: "none" }}>
+                        <span style={{ display: "inline-flex", width: 30, height: 30, flex: "none", alignItems: "center", justifyContent: "center", borderRadius: 8, background: "#F1F4F8", fontSize: 13, fontWeight: 700, color: "#5F6368" }}>{i + 1}</span>
+                        <span style={{ flex: 1, fontSize: 15, fontWeight: 600, color: "#1A73E8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{src.title}</span>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#bdc1c6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flex: "none" }}><path d="M7 17 17 7M9 7h8v8" /></svg>
                       </a>
                     ))}
-                    <button style={{ marginTop: 8, alignSelf: "flex-start", background: "none", border: "none", color: "#1A73E8", font: "inherit", fontSize: 14, fontWeight: 700, cursor: "pointer", padding: "4px 0" }}>Outras fontes →</button>
+                    {showAllSources && sources.slice(3).map((src, i) => (
+                      <a key={i + 3} href={src.url} target="_blank" rel="noopener noreferrer" style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 0", borderTop: "1px solid #F1F4F8", textDecoration: "none", animation: "vk-expand .22s ease" }}>
+                        <span style={{ display: "inline-flex", width: 30, height: 30, flex: "none", alignItems: "center", justifyContent: "center", borderRadius: 8, background: "#F1F4F8", fontSize: 13, fontWeight: 700, color: "#5F6368" }}>{i + 4}</span>
+                        <span style={{ flex: 1, fontSize: 15, fontWeight: 600, color: "#1A73E8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{src.title}</span>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#bdc1c6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flex: "none" }}><path d="M7 17 17 7M9 7h8v8" /></svg>
+                      </a>
+                    ))}
+                    {sources.length > 3 && (
+                      <button onClick={() => setShowAllSources(v => !v)} style={{ marginTop: 10, alignSelf: "flex-start", display: "inline-flex", alignItems: "center", gap: 6, background: "#F1F4F8", border: "none", borderRadius: 8, color: "#1A73E8", font: "inherit", fontSize: 13.5, fontWeight: 700, cursor: "pointer", padding: "7px 13px", transition: "background .15s" }}>
+                        {showAllSources ? (
+                          <>
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 15l-6-6-6 6" /></svg>
+                            Ver menos fontes
+                          </>
+                        ) : (
+                          <>
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+                            Ver mais {sources.length - 3} fonte{sources.length - 3 !== 1 ? "s" : ""}
+                          </>
+                        )}
+                      </button>
+                    )}
                   </div>
                 </div>
 
