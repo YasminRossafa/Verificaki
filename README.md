@@ -1,4 +1,4 @@
-# Transparência na Palma da Mão
+# Verificaki
 
 > Plataforma livre, anônima e gratuita para checagem de notícias e acesso a dados públicos sobre representantes políticos. Construída para o **2º Hackathon da Mobilização Popular** (UEE-SP, junho de 2026).
 
@@ -94,8 +94,8 @@ flowchart LR
 
 ```bash
 # 1. Clonar o repositório
-git clone https://github.com/SEU_USUARIO/transparencia-palma-mao.git
-cd transparencia-palma-mao
+git clone https://github.com/cb-hackathon/CMD-Verificaki.git
+cd CMD-Verificaki
 
 # 2. Instalar dependências
 npm install
