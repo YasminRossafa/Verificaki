@@ -170,6 +170,14 @@ Defina 'score' e 'status' ESTRITAMENTE dentro destas faixas:
    NUNCA pode ser "Verdadeiro" nesta faixa.
 3. 75 a 100 (Verdadeiro): corroborado por fontes da Etapa 1 (e, se houver, Etapa 2).
 
+LINGUAGEM PARA O USUÁRIO (OBRIGATÓRIO):
+- NUNCA escreva "Etapa 1", "Etapa 2" ou "Etapa 3" em 'summary' ou
+  'justificativaPenalizacao'. Use descrições em português simples:
+  - Etapa 1 → "fontes científicas e oficiais" (ou o órgão específico, ex.:
+    "dados do IBGE", "artigo publicado no PubMed")
+  - Etapa 2 → "veículos jornalísticos" ou "agências de checagem" conforme o caso
+  - Etapa 3 → "blogs", "redes sociais" ou "sites sem verificação editorial"
+
 ANÁLISE DE IMAGEM:
 - Analise a(s) imagem(ns) lendo principalmente o TEXTO e as alegações nela(s)
   contidas.
@@ -392,7 +400,9 @@ export const verificarNoticia = createServerFn({ method: "POST" })
     // not from URLs the model writes free-form — this is what eliminates
     // fabricated/dead links. Match each grounded URI to the Tier 1/2 allowlist,
     // resolve+HEAD-check it (dropping Tier 3 and dead links), and tag its etapa.
-    const sources = await buildSources(response);
+    // The model's free-form sources are passed as fallback: used to supplement
+    // when grounding yields fewer than 2 surviving sources.
+    const sources = await buildSources(response, parsed.sources);
 
     const rawScore = Math.round(Number(parsed.score));
     const scoreValid = Number.isFinite(rawScore);
@@ -429,33 +439,62 @@ export const verificarNoticia = createServerFn({ method: "POST" })
   });
 
 /**
- * Builds the cited source list from Google Search grounding metadata:
- * resolve each grounded URI (a Search redirect) to its real publisher URL,
- * keep only live Tier 1/2 domains, and tag each with its etapa. Tier 3 and
- * dead links never appear.
+ * Builds the cited source list from Google Search grounding metadata.
+ * Resolves each grounded URI (a Search redirect) to its real publisher URL,
+ * keeps only live Tier 1/2 domains, and tags each with its etapa.
+ *
+ * When grounding yields fewer than 2 sources, falls back to the URLs the
+ * model wrote free-form in its JSON `sources` field, applying the same
+ * tier-filter and liveness check. Tier 3 and dead links never appear.
  */
-async function buildSources(response: {
-  candidates?: Array<{
-    groundingMetadata?: {
-      groundingChunks?: Array<{ web?: { uri?: string; title?: string } }>;
-    };
-  }>;
-}): Promise<VerificarSource[]> {
+async function buildSources(
+  response: {
+    candidates?: Array<{
+      groundingMetadata?: {
+        groundingChunks?: Array<{ web?: { uri?: string; title?: string } }>;
+      };
+    }>;
+  },
+  fallbackModelSources?: unknown,
+): Promise<VerificarSource[]> {
   const chunks =
     response.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
-  const candidates = chunks
+
+  // Diagnostic: log what grounding returned so pipeline failures are visible.
+  console.log(
+    `[verificar] grounding chunks: ${chunks.length}`,
+    chunks
+      .slice(0, 3)
+      .map((c) => c.web?.uri ?? "(no uri)")
+      .join(" | "),
+  );
+
+  const groundingCandidates = chunks
     .map((chunk) => chunk.web)
     .filter(
-      (web): web is { uri?: string; title?: string } =>
+      (web): web is { uri: string; title?: string } =>
         !!web && typeof web.uri === "string",
     )
-    .slice(0, MAX_GROUNDING_CANDIDATES); // only a handful of allowed domains will survive
+    .slice(0, MAX_GROUNDING_CANDIDATES);
 
-  const resolved = await mapWithConcurrency(
-    candidates,
+  const sources: VerificarSource[] = [];
+  const seen = new Set<string>();
+
+  const addResolved = (candidate: VerificarSource | null): boolean => {
+    if (!candidate) return false;
+    const key = dedupeKey(candidate.url);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    sources.push(candidate);
+    return sources.length >= MAX_CITED_SOURCES;
+  };
+
+  // ── Stage 1: grounding metadata ──────────────────────────────────────────
+  const groundingResolved = await mapWithConcurrency(
+    groundingCandidates,
     MAX_CONCURRENCY,
     async (web) => {
-      const live = await resolveLiveUrl(web.uri as string);
+      const live = await resolveLiveUrl(web.uri);
       if (!live) return null;
       const etapa = matchEtapa(live.hostname);
       if (etapa === null) return null; // Tier 3 — never cited
@@ -465,22 +504,52 @@ async function buildSources(response: {
     },
   );
 
-  const sources: VerificarSource[] = [];
-  const seen = new Set<string>();
-  for (const source of resolved) {
-    if (!source) continue;
-    if (seen.has(dedupeKey(source.url))) continue;
-    seen.add(dedupeKey(source.url));
-    sources.push(source);
-    if (sources.length >= MAX_CITED_SOURCES) break;
+  for (const source of groundingResolved) {
+    if (addResolved(source)) break;
   }
 
-  // Observability: grounding returned references but none survived tier+liveness
-  // filtering. Most often this means the Search redirect URIs did not resolve to
-  // a real publisher host — worth noticing rather than silently returning [].
-  if (candidates.length > 0 && sources.length === 0) {
+  if (groundingCandidates.length > 0 && sources.length === 0) {
     console.warn(
-      `[verificar] ${candidates.length} grounding chunk(s) but 0 cited sources after tier/liveness filtering`,
+      `[verificar] ${groundingCandidates.length} grounding URI(s) but 0 survived tier/liveness — using model fallback`,
+    );
+  }
+
+  // ── Stage 2: model's free-form sources (fallback when grounding is sparse) ─
+  if (sources.length < 2 && Array.isArray(fallbackModelSources)) {
+    const fallbackCandidates = (fallbackModelSources as unknown[])
+      .filter(
+        (s): s is { title: string; url: string } =>
+          typeof s === "object" &&
+          s !== null &&
+          typeof (s as Record<string, unknown>).url === "string" &&
+          typeof (s as Record<string, unknown>).title === "string",
+      )
+      .slice(0, 10);
+
+    if (fallbackCandidates.length > 0) {
+      console.log(
+        `[verificar] supplementing with ${fallbackCandidates.length} model-provided source(s)`,
+      );
+      const fallbackResolved = await mapWithConcurrency(
+        fallbackCandidates,
+        MAX_CONCURRENCY,
+        async (s) => {
+          const live = await resolveLiveUrl(s.url);
+          if (!live) return null;
+          const etapa = matchEtapa(live.hostname);
+          if (etapa === null) return null; // Tier 3 — never cited
+          return { title: s.title, url: live.url, etapa };
+        },
+      );
+      for (const source of fallbackResolved) {
+        if (addResolved(source)) break;
+      }
+    }
+  }
+
+  if (sources.length === 0) {
+    console.warn(
+      "[verificar] all source pipelines exhausted — returning empty sources",
     );
   }
 
