@@ -102,7 +102,7 @@ npm install
 
 # 3. Configurar variáveis de ambiente
 cp .env.example .env.local
-# Editar .env.local e colocar sua DEEPSEEK_API_KEY
+# Editar .env.local e colocar sua GEMINI_API_KEY
 
 # 4. Rodar em modo desenvolvimento
 npm run dev
