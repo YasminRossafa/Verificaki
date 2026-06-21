@@ -100,7 +100,7 @@ const LogoSvg = ({ size = 38 }: { size?: number }) => (
 );
 
 function classify(s: number) {
-  if (s <= 45)
+  if (s < 45)
     return {
       label: "Conteúdo falso",
       short: "Falsa",
@@ -108,7 +108,7 @@ function classify(s: number) {
       bg: "#FCE8E6",
       icon: "✕",
     };
-  if (s <= 75)
+  if (s < 75)
     return {
       label: "Confiança média",
       short: "Média",
@@ -155,6 +155,7 @@ function Verificaki() {
   >([]);
   const [justificativaPenalizacao, setJustificativaPenalizacao] = useState("");
   const [showAllSources, setShowAllSources] = useState(false);
+  const [verdictStatus, setVerdictStatus] = useState<string>("");
 
   const timers = useRef<{
     step?: number;
@@ -212,6 +213,7 @@ function Verificaki() {
     setSources([]);
     setJustificativaPenalizacao("");
     setShowAllSources(false);
+    setVerdictStatus("");
   };
 
   const showError = (type: InputType) => {
@@ -224,10 +226,12 @@ function Verificaki() {
     finalSummary: string,
     finalSources: Array<{ title: string; url: string; etapa: 1 | 2 }>,
     finalJustificativa: string,
+    finalStatus: string,
   ) => {
     setSummary(finalSummary);
     setSources(finalSources);
     setJustificativaPenalizacao(finalJustificativa);
+    setVerdictStatus(finalStatus);
     setShowAllSources(false);
     setScreen("result");
     setScore(finalScore);
@@ -272,6 +276,7 @@ function Verificaki() {
         result.summary,
         result.sources,
         result.justificativaPenalizacao,
+        result.status,
       );
     } catch (error) {
       console.error("Verificar server function error:", error);
@@ -1027,26 +1032,30 @@ function Verificaki() {
                 </p>
                 <div style={{ width: "100%", maxWidth: 300, margin: "0 auto" }}>
                   <svg
-                    viewBox="0 0 200 118"
+                    viewBox="0 0 200 132"
                     style={{ width: "100%", height: "auto", display: "block" }}
                   >
+                    <defs>
+                      <linearGradient
+                        id="arcGrad"
+                        gradientUnits="userSpaceOnUse"
+                        x1="20"
+                        y1="0"
+                        x2="180"
+                        y2="0"
+                      >
+                        <stop offset="0%" stopColor="#EA4335" />
+                        <stop offset="42.18%" stopColor="#EA4335" />
+                        <stop offset="42.18%" stopColor="#FBBC04" />
+                        <stop offset="85.36%" stopColor="#FBBC04" />
+                        <stop offset="85.36%" stopColor="#34A853" />
+                        <stop offset="100%" stopColor="#34A853" />
+                      </linearGradient>
+                    </defs>
                     <path
-                      d="M20 110 A80 80 0 0 1 87.5 31"
+                      d="M20 110 A80 80 0 0 1 180 110"
                       fill="none"
-                      stroke="#EA4335"
-                      strokeWidth="15"
-                      strokeLinecap="round"
-                    />
-                    <path
-                      d="M90.6 29.6 A80 80 0 0 1 153.8 50.6"
-                      fill="none"
-                      stroke="#FBBC04"
-                      strokeWidth="15"
-                    />
-                    <path
-                      d="M156.6 53 A80 80 0 0 1 180 110"
-                      fill="none"
-                      stroke="#34A853"
+                      stroke="url(#arcGrad)"
                       strokeWidth="15"
                       strokeLinecap="round"
                     />
@@ -1068,7 +1077,7 @@ function Verificaki() {
                     <circle cx="100" cy="110" r="3.4" fill="#fff" />
                     <text
                       x="18"
-                      y="116"
+                      y="129"
                       fontSize="9"
                       fill="#9aa0a6"
                       fontFamily="Source Sans 3,sans-serif"
@@ -1078,7 +1087,7 @@ function Verificaki() {
                     </text>
                     <text
                       x="182"
-                      y="116"
+                      y="129"
                       fontSize="9"
                       fill="#9aa0a6"
                       fontFamily="Source Sans 3,sans-serif"
@@ -1136,18 +1145,124 @@ function Verificaki() {
                   {cls.label}
                 </div>
                 {justificativaPenalizacao && (
-                  <p
+                  <div
                     style={{
-                      fontSize: 12.5,
-                      color: "#80868B",
-                      margin: "10px 16px 0",
-                      lineHeight: 1.5,
-                      fontStyle: "italic",
+                      marginTop: 14,
+                      padding: "13px 16px",
+                      borderRadius: 12,
+                      background: cls.bg,
+                      border: `1.5px solid ${cls.color}33`,
+                      display: "flex",
+                      gap: 10,
+                      alignItems: "flex-start",
+                      textAlign: "left",
                     }}
                   >
-                    {justificativaPenalizacao}
-                  </p>
+                    <span
+                      style={{
+                        marginTop: 2,
+                        flexShrink: 0,
+                        display: "inline-flex",
+                        width: 20,
+                        height: 20,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: "50%",
+                        background: cls.color,
+                        color: "#fff",
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {cls.icon}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 14,
+                        lineHeight: 1.55,
+                        color: "#2d3748",
+                        fontWeight: 500,
+                      }}
+                    >
+                      {justificativaPenalizacao}
+                    </span>
+                  </div>
                 )}
+                <div
+                  style={{
+                    marginTop: 18,
+                    textAlign: "left",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 7,
+                  }}
+                >
+                  <p
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 700,
+                      letterSpacing: ".10em",
+                      textTransform: "uppercase",
+                      color: "#80868B",
+                      margin: "0 0 4px",
+                    }}
+                  >
+                    Confiança das fontes
+                  </p>
+                  {(
+                    [
+                      {
+                        color: "#34A853",
+                        label: "Grupo 1 — Confiável",
+                        desc: "Artigos passam por revisão por pares e publicações oficiais",
+                      },
+                      {
+                        color: "#E0900A",
+                        label: "Grupo 2 — Parcial",
+                        desc: "Portais de notícia têm linha editorial e potencial viés",
+                      },
+                      {
+                        color: "#EA4335",
+                        label: "Grupo 3 — Não confiável",
+                        desc: "Blogs e redes sociais sem base verificável",
+                      },
+                    ] as const
+                  ).map((item) => (
+                    <div
+                      key={item.label}
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: 9,
+                      }}
+                    >
+                      <span
+                        style={{
+                          marginTop: 3,
+                          flexShrink: 0,
+                          width: 11,
+                          height: 11,
+                          borderRadius: "50%",
+                          background: item.color,
+                          display: "inline-block",
+                        }}
+                      />
+                      <span
+                        style={{
+                          fontSize: 13,
+                          lineHeight: 1.45,
+                          color: "#3c4043",
+                        }}
+                      >
+                        <strong style={{ color: item.color }}>
+                          {item.label}
+                        </strong>
+                        {" — "}
+                        {item.desc}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
 
               <div
@@ -1285,10 +1400,10 @@ function Verificaki() {
                             borderRadius: 4,
                             ...(src.etapa === 1
                               ? { background: "#E6F4EA", color: "#137333" }
-                              : { background: "#FEF7E0", color: "#8A6914" }),
+                              : { background: "#FEF6DC", color: "#8A6914" }),
                           }}
                         >
-                          {src.etapa === 1 ? "Científico" : "Jornalístico"}
+                          {src.etapa === 1 ? "Grupo 1" : "Grupo 2"}
                         </span>
                         <svg
                           width="14"
@@ -1361,10 +1476,10 @@ function Verificaki() {
                               borderRadius: 4,
                               ...(src.etapa === 1
                                 ? { background: "#E6F4EA", color: "#137333" }
-                                : { background: "#FEF7E0", color: "#8A6914" }),
+                                : { background: "#FEF6DC", color: "#8A6914" }),
                             }}
                           >
-                            {src.etapa === 1 ? "Científico" : "Jornalístico"}
+                            {src.etapa === 1 ? "Grupo 1" : "Grupo 2"}
                           </span>
                           <svg
                             width="14"
