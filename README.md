@@ -1,6 +1,6 @@
 # Verificaki
 
-> Plataforma livre, anônima e gratuita para checagem de notícias e acesso a dados públicos sobre representantes políticos. Construída para o **2º Hackathon da Mobilização Popular** (UEE-SP, junho de 2026).
+> Plataforma livre, anônima e gratuita para  verificar a veracidade de Links, notícias e imagens suspeitas. Construída para o **2º Hackathon da Mobilização Popular** (UEE-SP, junho de 2026).
 
 [![Licença](https://img.shields.io/badge/licen%C3%A7a-AGPL--3.0-blue)](LICENSE)
 [![Software Livre](https://img.shields.io/badge/software-livre-success)](https://www.gnu.org/philosophy/free-sw.pt-br.html)
