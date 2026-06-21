@@ -24,6 +24,22 @@ export const Route = createFileRoute("/")({
 type Screen = "home" | "loading" | "result" | "error";
 type InputType = "link" | "text" | "image";
 type InstallState = "hidden" | "prompt" | "how";
+type Platform = "android" | "ios" | "none";
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt(): Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+}
+
+function detectPlatform(): Platform {
+  const ua = navigator.userAgent;
+  const isIOS =
+    /iPhone|iPad|iPod/i.test(ua) &&
+    !/CriOS|FxiOS|EdgiOS/i.test(ua); // exclude Chrome/Firefox/Edge on iOS
+  if (isIOS) return "ios";
+  // Android / desktop: determined by whether beforeinstallprompt fires — not here
+  return "none";
+}
 
 const ICON_LINK = (
   <svg
@@ -154,6 +170,8 @@ function Verificaki() {
   const [loadingStep, setLoadingStep] = useState(0);
   const [errorType, setErrorType] = useState<InputType>("link");
   const [install, setInstall] = useState<InstallState>("hidden");
+  const [canNativeInstall, setCanNativeInstall] = useState(false);
+  const deferredPrompt = useRef<BeforeInstallPromptEvent | null>(null);
   const [summary, setSummary] = useState("");
   const [sources, setSources] = useState<
     Array<{ title: string; url: string; etapa: 1 | 2 }>
@@ -185,13 +203,32 @@ function Verificaki() {
     try {
       dismissed = localStorage.getItem("vk_install_dismissed") === "1";
     } catch {}
-    if (!dismissed) {
-      timers.current.install = window.setTimeout(
-        () => setInstall("prompt"),
-        2600,
-      );
+
+    if (dismissed) return;
+
+    const platform = detectPlatform();
+
+    // iOS: timer-based show (same 2600ms)
+    if (platform === "ios") {
+      timers.current.install = window.setTimeout(() => setInstall("prompt"), 2600);
     }
+
+    // Android: capture beforeinstallprompt; show only when it fires (and it's mobile)
+    const handleBIP = (e: Event) => {
+      e.preventDefault();
+      const bip = e as BeforeInstallPromptEvent;
+      deferredPrompt.current = bip;
+      // Only show on mobile (Android), not desktop
+      const isMobile = /Android/i.test(navigator.userAgent) || window.innerWidth < 768;
+      if (isMobile) {
+        setCanNativeInstall(true);
+        setInstall("prompt");
+      }
+    };
+    window.addEventListener("beforeinstallprompt", handleBIP);
+
     return () => {
+      window.removeEventListener("beforeinstallprompt", handleBIP);
       clearTimers();
       if (timers.current.install) clearTimeout(timers.current.install);
     };
@@ -316,6 +353,18 @@ function Verificaki() {
     try {
       localStorage.setItem("vk_install_dismissed", "1");
     } catch {}
+  };
+
+  const handleInstallClick = async () => {
+    if (deferredPrompt.current) {
+      // Android: trigger native install dialog
+      await deferredPrompt.current.prompt();
+      deferredPrompt.current = null;
+      dismissInstall();
+    } else {
+      // iOS: show manual steps
+      setInstall("how");
+    }
   };
 
   const wordCount = countWords(inputValue);
@@ -2130,12 +2179,11 @@ function Verificaki() {
                       color: "#5F6368",
                     }}
                   >
-                    Adicione à tela inicial do seu celular e verifique notícias
-                    com um só toque.
+                    Adicione à tela inicial e verifique notícias com um toque, a qualquer momento.
                   </p>
                   <div style={{ display: "flex", gap: 9, flexWrap: "wrap" }}>
                     <button
-                      onClick={() => setInstall("how")}
+                      onClick={handleInstallClick}
                       style={{
                         display: "inline-flex",
                         alignItems: "center",
@@ -2151,19 +2199,40 @@ function Verificaki() {
                         cursor: "pointer",
                       }}
                     >
-                      <svg
-                        width="15"
-                        height="15"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <path d="M12 5v14M5 12h14" />
-                      </svg>
-                      Adicionar à tela inicial
+                      {canNativeInstall ? (
+                        <>
+                          <svg
+                            width="15"
+                            height="15"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M12 17V3M7 8l5-5 5 5" />
+                            <path d="M5 17v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2" />
+                          </svg>
+                          Instalar
+                        </>
+                      ) : (
+                        <>
+                          <svg
+                            width="15"
+                            height="15"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M12 5v14M5 12h14" />
+                          </svg>
+                          Como adicionar
+                        </>
+                      )}
                     </button>
                     <button
                       onClick={dismissInstall}
@@ -2194,12 +2263,12 @@ function Verificaki() {
                       color: "#0E2A47",
                     }}
                   >
-                    Como adicionar
+                    Como instalar em 2 passos
                   </h3>
                   <div
                     style={{
                       display: "flex",
-                      alignItems: "center",
+                      alignItems: "flex-start",
                       gap: 8,
                       fontSize: 13.5,
                       color: "#3c4043",
@@ -2219,19 +2288,19 @@ function Verificaki() {
                         color: "#1A73E8",
                         fontSize: 12,
                         fontWeight: 700,
+                        marginTop: 1,
                       }}
                     >
                       1
                     </span>
-                    Toque em{" "}
-                    <strong style={{ color: "#0E2A47" }}>Compartilhar</strong>{" "}
-                    ou no menu <strong style={{ color: "#0E2A47" }}>⋮</strong>{" "}
-                    do navegador.
+                    <span>
+                      Toque no ícone de compartilhar — o quadrado com uma seta para cima, na barra inferior do Safari.
+                    </span>
                   </div>
                   <div
                     style={{
                       display: "flex",
-                      alignItems: "center",
+                      alignItems: "flex-start",
                       gap: 8,
                       fontSize: 13.5,
                       color: "#3c4043",
@@ -2251,15 +2320,15 @@ function Verificaki() {
                         color: "#1A73E8",
                         fontSize: 12,
                         fontWeight: 700,
+                        marginTop: 1,
                       }}
                     >
                       2
                     </span>
-                    Escolha{" "}
-                    <strong style={{ color: "#0E2A47" }}>
-                      "Adicionar à Tela de Início"
-                    </strong>
-                    .
+                    <span>
+                      Role a lista e toque em{" "}
+                      <strong style={{ color: "#0E2A47" }}>"Adicionar à Tela de Início"</strong>.
+                    </span>
                   </div>
                   <button
                     onClick={dismissInstall}
@@ -2290,7 +2359,7 @@ function Verificaki() {
                     >
                       <path d="M20 6 9 17l-5-5" />
                     </svg>
-                    Entendi
+                    Entendido
                   </button>
                 </>
               )}
