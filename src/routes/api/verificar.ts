@@ -439,13 +439,22 @@ export const verificarNoticia = createServerFn({ method: "POST" })
   });
 
 /**
- * Builds the cited source list from Google Search grounding metadata.
- * Resolves each grounded URI (a Search redirect) to its real publisher URL,
- * keeps only live Tier 1/2 domains, and tags each with its etapa.
+ * Builds the cited source list. Three stages in order; the first two stages
+ * that together yield ≥ 2 sources stop processing:
  *
- * When grounding yields fewer than 2 sources, falls back to the URLs the
- * model wrote free-form in its JSON `sources` field, applying the same
- * tier-filter and liveness check. Tier 3 and dead links never appear.
+ *  Stage 1 — grounding metadata with liveness: follows each grounded URI
+ *   (which may be a Google redirect) to the real publisher URL, checks it
+ *   is live, then tier-filters by the resolved hostname.
+ *   Sub-fallback 1b: if liveness/redirect fails for a chunk, try matching
+ *   the chunk's original URI hostname directly against the allowlist (works
+ *   when the chunk already carries the publisher URL, not a redirect).
+ *
+ *  Stage 2 — model's free-form sources, hostname-only: no HTTP requests.
+ *   Parses each URL the model wrote in `sources[]`, matches hostname against
+ *   the Tier 1/2 allowlist. Fast and reliable — the model is instructed to
+ *   only cite allowlisted domains, so this almost always yields results.
+ *
+ * Tier 3 and invalid URLs never appear in the returned list.
  */
 async function buildSources(
   response: {
@@ -460,7 +469,6 @@ async function buildSources(
   const chunks =
     response.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
 
-  // Diagnostic: log what grounding returned so pipeline failures are visible.
   console.log(
     `[verificar] grounding chunks: ${chunks.length}`,
     chunks
@@ -469,18 +477,10 @@ async function buildSources(
       .join(" | "),
   );
 
-  const groundingCandidates = chunks
-    .map((chunk) => chunk.web)
-    .filter(
-      (web): web is { uri: string; title?: string } =>
-        !!web && typeof web.uri === "string",
-    )
-    .slice(0, MAX_GROUNDING_CANDIDATES);
-
   const sources: VerificarSource[] = [];
   const seen = new Set<string>();
 
-  const addResolved = (candidate: VerificarSource | null): boolean => {
+  const tryAdd = (candidate: VerificarSource | null): boolean => {
     if (!candidate) return false;
     const key = dedupeKey(candidate.url);
     if (seen.has(key)) return false;
@@ -489,68 +489,86 @@ async function buildSources(
     return sources.length >= MAX_CITED_SOURCES;
   };
 
-  // ── Stage 1: grounding metadata ──────────────────────────────────────────
+  /** Tier-filter by hostname without any network call. */
+  const fromHostname = (
+    rawUrl: string,
+    title: string,
+  ): VerificarSource | null => {
+    try {
+      const host = new URL(rawUrl).hostname.toLowerCase().replace(/^www\./, "");
+      const etapa = matchEtapa(host);
+      if (etapa === null) return null;
+      return { title: title || host, url: rawUrl, etapa };
+    } catch {
+      return null;
+    }
+  };
+
+  // ── Stage 1: grounding chunks ─────────────────────────────────────────────
+  const groundingCandidates = chunks
+    .map((chunk) => chunk.web)
+    .filter(
+      (web): web is { uri: string; title?: string } =>
+        !!web && typeof web.uri === "string",
+    )
+    .slice(0, MAX_GROUNDING_CANDIDATES);
+
   const groundingResolved = await mapWithConcurrency(
     groundingCandidates,
     MAX_CONCURRENCY,
     async (web) => {
+      const title = (web.title ?? "").trim();
+
+      // Stage 1a: follow redirects and check liveness (handles Google redirect URLs).
       const live = await resolveLiveUrl(web.uri);
-      if (!live) return null;
-      const etapa = matchEtapa(live.hostname);
-      if (etapa === null) return null; // Tier 3 — never cited
-      const title =
-        (web.title ?? "").trim() || live.hostname.replace(/^www\./, "");
-      return { title, url: live.url, etapa };
+      if (live) {
+        const etapa = matchEtapa(live.hostname);
+        if (etapa !== null)
+          return {
+            title: title || live.hostname.replace(/^www\./, ""),
+            url: live.url,
+            etapa,
+          };
+      }
+
+      // Stage 1b: liveness/redirect failed — match original URI hostname directly.
+      // Works when the chunk already carries a publisher URL (not a redirect).
+      return fromHostname(web.uri, title);
     },
   );
 
   for (const source of groundingResolved) {
-    if (addResolved(source)) break;
+    if (tryAdd(source)) break;
   }
 
   if (groundingCandidates.length > 0 && sources.length === 0) {
     console.warn(
-      `[verificar] ${groundingCandidates.length} grounding URI(s) but 0 survived tier/liveness — using model fallback`,
+      `[verificar] ${groundingCandidates.length} grounding URI(s): 0 survived stage 1 — continuing to stage 2`,
     );
   }
 
-  // ── Stage 2: model's free-form sources (fallback when grounding is sparse) ─
+  // ── Stage 2: model's free-form sources, hostname-only (no HTTP) ───────────
   if (sources.length < 2 && Array.isArray(fallbackModelSources)) {
-    const fallbackCandidates = (fallbackModelSources as unknown[])
-      .filter(
-        (s): s is { title: string; url: string } =>
-          typeof s === "object" &&
-          s !== null &&
-          typeof (s as Record<string, unknown>).url === "string" &&
-          typeof (s as Record<string, unknown>).title === "string",
-      )
-      .slice(0, 10);
+    const modelCandidates = (fallbackModelSources as unknown[]).filter(
+      (s): s is { title: string; url: string } =>
+        typeof s === "object" &&
+        s !== null &&
+        typeof (s as Record<string, unknown>).url === "string" &&
+        typeof (s as Record<string, unknown>).title === "string",
+    );
 
-    if (fallbackCandidates.length > 0) {
+    if (modelCandidates.length > 0) {
       console.log(
-        `[verificar] supplementing with ${fallbackCandidates.length} model-provided source(s)`,
+        `[verificar] stage 2: checking ${modelCandidates.length} model-provided URL(s) by hostname`,
       );
-      const fallbackResolved = await mapWithConcurrency(
-        fallbackCandidates,
-        MAX_CONCURRENCY,
-        async (s) => {
-          const live = await resolveLiveUrl(s.url);
-          if (!live) return null;
-          const etapa = matchEtapa(live.hostname);
-          if (etapa === null) return null; // Tier 3 — never cited
-          return { title: s.title, url: live.url, etapa };
-        },
-      );
-      for (const source of fallbackResolved) {
-        if (addResolved(source)) break;
+      for (const s of modelCandidates) {
+        if (tryAdd(fromHostname(s.url, s.title))) break;
       }
     }
   }
 
   if (sources.length === 0) {
-    console.warn(
-      "[verificar] all source pipelines exhausted — returning empty sources",
-    );
+    console.warn("[verificar] all stages exhausted — no sources to return");
   }
 
   return sources;
