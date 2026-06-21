@@ -141,14 +141,15 @@ function Verificaki() {
   const [screen, setScreen] = useState<Screen>("home");
   const [inputType, setInputType] = useState<InputType>("link");
   const [inputValue, setInputValue] = useState("");
-  const [imageName, setImageName] = useState("");
+  const [imageFiles, setImageFiles] = useState<
+    Array<{ name: string; data: string }>
+  >([]);
   const [score, setScore] = useState(0);
   const [displayScore, setDisplayScore] = useState(0);
   const [gaugeScore, setGaugeScore] = useState(0);
   const [loadingStep, setLoadingStep] = useState(0);
   const [errorType, setErrorType] = useState<InputType>("link");
   const [install, setInstall] = useState<InstallState>("hidden");
-  const [imageData, setImageData] = useState("");
   const [summary, setSummary] = useState("");
   const [sources, setSources] = useState<
     Array<{ title: string; url: string; etapa: 1 | 2 }>
@@ -195,16 +196,14 @@ function Verificaki() {
   const setType = (t: InputType) => {
     setInputType(t);
     setInputValue("");
-    setImageName("");
-    setImageData("");
+    setImageFiles([]);
   };
 
   const goHome = () => {
     clearTimers();
     setScreen("home");
     setInputValue("");
-    setImageName("");
-    setImageData("");
+    setImageFiles([]);
     setScore(0);
     setDisplayScore(0);
     setGaugeScore(0);
@@ -267,7 +266,9 @@ function Verificaki() {
       const result = await verificarNoticia({
         data: {
           inputType,
-          inputValue: inputType === "image" ? imageData : inputValue,
+          ...(inputType === "image"
+            ? { images: imageFiles.map((f) => f.data) }
+            : { inputValue }),
         },
       });
       clearTimers();
@@ -290,7 +291,8 @@ function Verificaki() {
     if (inputType === "text" && v.length < 100) return showError("text");
     if (inputType === "link" && !/^https?:\/\//i.test(v))
       return showError("link");
-    if (inputType === "image" && !imageName) return showError("image");
+    if (inputType === "image" && imageFiles.length === 0)
+      return showError("image");
     startLoading();
   };
 
@@ -563,65 +565,172 @@ function Verificaki() {
               </div>
 
               {inputType === "image" && (
-                <label
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: 10,
-                    marginTop: 16,
-                    minHeight: 148,
-                    border: "2px dashed #c4d3e8",
-                    borderRadius: 13,
-                    background: "#F7FAFE",
-                    cursor: "pointer",
-                    textAlign: "center",
-                    padding: 20,
-                  }}
-                >
-                  <svg
-                    width="34"
-                    height="34"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="#1A73E8"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <path d="M17 8l-5-5-5 5" />
-                    <path d="M12 3v13" />
-                  </svg>
-                  <span
-                    style={{
-                      fontSize: 15.5,
-                      fontWeight: 600,
-                      color: "#0E2A47",
-                    }}
-                  >
-                    {imageName || "Arraste uma imagem ou clique para enviar"}
-                  </span>
-                  <span style={{ fontSize: 13, color: "#80868B" }}>
-                    PNG, JPG ou prints de tela · até 10MB
-                  </span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) {
-                        setImageName(f.name);
-                        const reader = new FileReader();
-                        reader.onload = (ev) =>
-                          setImageData((ev.target?.result as string) ?? "");
-                        reader.readAsDataURL(f);
-                      }
-                    }}
-                    style={{ display: "none" }}
-                  />
-                </label>
+                <div style={{ marginTop: 16 }}>
+                  {imageFiles.length > 0 && (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 10,
+                        marginBottom: 12,
+                      }}
+                    >
+                      {imageFiles.map((file, idx) => (
+                        <div
+                          key={idx}
+                          style={{
+                            width: 80,
+                            height: 80,
+                            borderRadius: 10,
+                            overflow: "hidden",
+                            position: "relative",
+                            flexShrink: 0,
+                          }}
+                        >
+                          <img
+                            src={file.data}
+                            alt={file.name}
+                            style={{
+                              width: "100%",
+                              height: "100%",
+                              objectFit: "cover",
+                              display: "block",
+                            }}
+                          />
+                          <button
+                            onClick={() =>
+                              setImageFiles((prev) =>
+                                prev.filter((_, i) => i !== idx),
+                              )
+                            }
+                            aria-label={`Remover ${file.name}`}
+                            style={{
+                              position: "absolute",
+                              top: 4,
+                              right: 4,
+                              width: 20,
+                              height: 20,
+                              borderRadius: "50%",
+                              background: "rgba(0,0,0,0.55)",
+                              border: "none",
+                              color: "#fff",
+                              fontSize: 12,
+                              lineHeight: 1,
+                              cursor: "pointer",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              padding: 0,
+                            }}
+                          >
+                            ×
+                          </button>
+                          <div
+                            style={{
+                              position: "absolute",
+                              bottom: 0,
+                              left: 0,
+                              right: 0,
+                              background: "rgba(0,0,0,0.45)",
+                              padding: "2px 4px",
+                              fontSize: 11,
+                              color: "#E8EAED",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {file.name.length > 18
+                              ? file.name.slice(0, 18) + "…"
+                              : file.name}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {imageFiles.length < 3 ? (
+                    <label
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: 10,
+                        minHeight: 148,
+                        border: "2px dashed #c4d3e8",
+                        borderRadius: 13,
+                        background: "#F7FAFE",
+                        cursor: "pointer",
+                        textAlign: "center",
+                        padding: 20,
+                      }}
+                    >
+                      <svg
+                        width="34"
+                        height="34"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="#1A73E8"
+                        strokeWidth="1.8"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <path d="M17 8l-5-5-5 5" />
+                        <path d="M12 3v13" />
+                      </svg>
+                      <span
+                        style={{
+                          fontSize: 15.5,
+                          fontWeight: 600,
+                          color: "#0E2A47",
+                        }}
+                      >
+                        {imageFiles.length === 0
+                          ? "Arraste uma imagem ou clique para enviar"
+                          : imageFiles.length === 1
+                            ? "Adicionar mais uma imagem"
+                            : "Adicionar última imagem (máx. 3)"}
+                      </span>
+                      <span style={{ fontSize: 13, color: "#80868B" }}>
+                        PNG, JPG ou prints de tela · até 10MB por imagem
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f && imageFiles.length < 3) {
+                            const reader = new FileReader();
+                            reader.onload = (ev) => {
+                              const data =
+                                (ev.target?.result as string) ?? "";
+                              setImageFiles((prev) => [
+                                ...prev,
+                                { name: f.name, data },
+                              ]);
+                            };
+                            reader.readAsDataURL(f);
+                          }
+                          e.target.value = "";
+                        }}
+                        style={{ display: "none" }}
+                      />
+                    </label>
+                  ) : (
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: 13,
+                        color: "#80868B",
+                        textAlign: "center",
+                      }}
+                    >
+                      Limite de 3 imagens atingido
+                    </p>
+                  )}
+                </div>
               )}
 
               {inputType === "text" && (
