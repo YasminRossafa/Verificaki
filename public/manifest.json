@@ -1,0 +1,18 @@
+{
+  "name": "Verificaki",
+  "short_name": "Verificaki",
+  "description": "Verifique a veracidade de notícias em segundos",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FBFCFE",
+  "theme_color": "#1A73E8",
+  "lang": "pt-BR",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
