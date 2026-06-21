@@ -99,6 +99,10 @@ const LogoSvg = ({ size = 38 }: { size?: number }) => (
   </svg>
 );
 
+function countWords(text: string): number {
+  return text.trim() === "" ? 0 : text.trim().split(/\s+/).length;
+}
+
 function classify(s: number) {
   if (s < 45)
     return {
@@ -288,6 +292,7 @@ function Verificaki() {
 
   const verify = () => {
     const v = inputValue.trim();
+    if (inputType === "text" && overLimit) return;
     if (inputType === "text" && v.length < 100) return showError("text");
     if (inputType === "link" && !/^https?:\/\//i.test(v))
       return showError("link");
@@ -312,6 +317,9 @@ function Verificaki() {
       localStorage.setItem("vk_install_dismissed", "1");
     } catch {}
   };
+
+  const wordCount = countWords(inputValue);
+  const overLimit = wordCount > 1000;
 
   const cls = classify(score);
   const needleTransform = `rotate(${(1.8 * gaugeScore - 90).toFixed(1)}deg)`;
@@ -734,27 +742,57 @@ function Verificaki() {
               )}
 
               {inputType === "text" && (
-                <textarea
-                  onChange={(e) => setInputValue(e.target.value)}
-                  value={inputValue}
-                  aria-label="Texto da notícia"
-                  placeholder="Escreva ou cole o texto da notícia que deseja verificar (mínimo 100 caracteres)..."
-                  style={{
-                    width: "100%",
-                    marginTop: 16,
-                    minHeight: 130,
-                    resize: "vertical",
-                    border: "1px solid #DADCE0",
-                    borderRadius: 13,
-                    padding: "14px 16px",
-                    font: "inherit",
-                    fontSize: 16,
-                    lineHeight: 1.5,
-                    color: "#1F2A37",
-                    outline: "none",
-                    background: "#fff",
-                  }}
-                />
+                <div style={{ marginTop: 16 }}>
+                  <textarea
+                    onChange={(e) => setInputValue(e.target.value)}
+                    value={inputValue}
+                    aria-label="Texto da notícia"
+                    placeholder="Escreva ou cole o texto da notícia que deseja verificar (mínimo 100 caracteres)..."
+                    style={{
+                      width: "100%",
+                      minHeight: 130,
+                      resize: "vertical",
+                      border: overLimit
+                        ? "1px solid #EA4335"
+                        : "1px solid #DADCE0",
+                      borderRadius: 13,
+                      padding: "14px 16px",
+                      font: "inherit",
+                      fontSize: 16,
+                      lineHeight: 1.5,
+                      color: "#1F2A37",
+                      outline: "none",
+                      background: "#fff",
+                      boxSizing: "border-box",
+                    }}
+                  />
+                  <p
+                    style={{
+                      margin: "6px 0 0",
+                      textAlign: "right",
+                      fontSize: 12.5,
+                      fontWeight: overLimit ? 700 : 400,
+                      color: overLimit ? "#EA4335" : "#80868B",
+                    }}
+                  >
+                    {wordCount} / 1000 palavras
+                  </p>
+                  {overLimit && (
+                    <div
+                      style={{
+                        marginTop: 8,
+                        background: "#FCE8E6",
+                        border: "1px solid #f6c5c0",
+                        borderRadius: 10,
+                        padding: "10px 14px",
+                        fontSize: 13.5,
+                        color: "#a8302a",
+                      }}
+                    >
+                      Texto muito longo. Reduza para no máximo 1.000 palavras.
+                    </div>
+                  )}
+                </div>
               )}
 
               {inputType === "link" && (
