@@ -3,7 +3,7 @@ import { GoogleGenAI } from "@google/genai";
 import {
   MAX_CONCURRENCY,
   mapWithConcurrency,
-  resolveLiveUrl,
+  resolveGroundingUri,
 } from "../../lib/url-safety";
 
 // ───────────────────────────────────────────────
@@ -273,6 +273,8 @@ const VALID_TIPO_FONTE: TipoFonte[] = ["Academica", "Noticiario", "Mista"];
 // Grounding chunks to attempt to resolve vs. sources ultimately cited.
 const MAX_GROUNDING_CANDIDATES = 15;
 const MAX_CITED_SOURCES = 8;
+// Task requirement: grounding resolution requests capped at 4 in parallel.
+const GROUNDING_CONCURRENCY = 4;
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -439,20 +441,17 @@ export const verificarNoticia = createServerFn({ method: "POST" })
   });
 
 /**
- * Builds the cited source list. Three stages in order; the first two stages
- * that together yield ≥ 2 sources stop processing:
+ * Builds the cited source list. Two stages:
  *
- *  Stage 1 — grounding metadata with liveness: follows each grounded URI
- *   (which may be a Google redirect) to the real publisher URL, checks it
- *   is live, then tier-filters by the resolved hostname.
- *   Sub-fallback 1b: if liveness/redirect fails for a chunk, try matching
- *   the chunk's original URI hostname directly against the allowlist (works
- *   when the chunk already carries the publisher URL, not a redirect).
+ *  Stage 1 — grounding metadata: resolves each grounded URI to its real
+ *   publisher URL via `resolveGroundingUri` (follows redirects, SSRF-validates
+ *   the final destination), then tier-filters by the resolved hostname.
+ *   The resolved publisher URL — never the Google proxy URL — goes into
+ *   `sources`. Concurrency capped at GROUNDING_CONCURRENCY (4).
  *
  *  Stage 2 — model's free-form sources, hostname-only: no HTTP requests.
  *   Parses each URL the model wrote in `sources[]`, matches hostname against
- *   the Tier 1/2 allowlist. Fast and reliable — the model is instructed to
- *   only cite allowlisted domains, so this almost always yields results.
+ *   the Tier 1/2 allowlist. Used when grounding yields < 2 sources.
  *
  * Tier 3 and invalid URLs never appear in the returned list.
  */
@@ -504,7 +503,7 @@ async function buildSources(
     }
   };
 
-  // ── Stage 1: grounding chunks ─────────────────────────────────────────────
+  // ── Stage 1: resolve grounding URIs → tier-filter ────────────────────────
   const groundingCandidates = chunks
     .map((chunk) => chunk.web)
     .filter(
@@ -515,25 +514,18 @@ async function buildSources(
 
   const groundingResolved = await mapWithConcurrency(
     groundingCandidates,
-    MAX_CONCURRENCY,
+    GROUNDING_CONCURRENCY, // ≤ 4 concurrent per task requirement
     async (web) => {
-      const title = (web.title ?? "").trim();
-
-      // Stage 1a: follow redirects and check liveness (handles Google redirect URLs).
-      const live = await resolveLiveUrl(web.uri);
-      if (live) {
-        const etapa = matchEtapa(live.hostname);
-        if (etapa !== null)
-          return {
-            title: title || live.hostname.replace(/^www\./, ""),
-            url: live.url,
-            etapa,
-          };
-      }
-
-      // Stage 1b: liveness/redirect failed — match original URI hostname directly.
-      // Works when the chunk already carries a publisher URL (not a redirect).
-      return fromHostname(web.uri, title);
+      // Resolve the raw grounding URI (typically a vertexaisearch.google.com
+      // proxy) to the actual publisher URL before applying the tier filter.
+      // resolveGroundingUri follows redirects and SSRF-validates the final URL;
+      // the Google proxy hostname is never used for the allowlist check.
+      const resolved = await resolveGroundingUri(web.uri);
+      if (!resolved) return null;
+      const etapa = matchEtapa(resolved.hostname);
+      if (etapa === null) return null; // Tier 3 — never cited
+      const title = (web.title ?? "").trim() || resolved.hostname;
+      return { title, url: resolved.url, etapa };
     },
   );
 
@@ -543,7 +535,7 @@ async function buildSources(
 
   if (groundingCandidates.length > 0 && sources.length === 0) {
     console.warn(
-      `[verificar] ${groundingCandidates.length} grounding URI(s): 0 survived stage 1 — continuing to stage 2`,
+      `[verificar] ${groundingCandidates.length} grounding URI(s) resolved but 0 matched Tier 1/2 — using model fallback`,
     );
   }
 

@@ -14,6 +14,10 @@ const TOTAL_BUDGET_MS = 8000; // overall deadline across an entire redirect chai
 const MAX_REDIRECTS = 5;
 export const MAX_CONCURRENCY = 5;
 
+// Grounding-URI resolution constants (separate from the generic liveness check).
+const GROUNDING_HOP_TIMEOUT_MS = 3000; // per-hop timeout (task: ≤ 3 s)
+const GROUNDING_MAX_HOPS = 5; // cap redirect depth
+
 /** True if an IP literal falls in a private, loopback, link-local or otherwise non-public range. */
 export function isDisallowedIp(ip: string): boolean {
   const version = isIP(ip);
@@ -201,6 +205,97 @@ export async function resolveLiveUrl(rawUrl: string): Promise<LiveUrl | null> {
   }
 
   return null; // too many redirects
+}
+
+/**
+ * Resolves a grounding redirect URI to its real publisher URL by following up
+ * to GROUNDING_MAX_HOPS redirects, then SSRF-validates the final destination.
+ *
+ * Differs from `resolveLiveUrl` in one key way: intermediate hops are
+ * scheme-checked (http/https only) and stripped of credentials, but are NOT
+ * DNS-validated individually. Only the final resolved URL goes through
+ * `assertPublicHttpUrl` (which does the DNS + private-IP check). This avoids
+ * the per-hop DNS-lookup bottleneck that caused Google's redirect chains to
+ * time out, while still rejecting final destinations that resolve to private,
+ * loopback, or reserved addresses (SSRF protection).
+ *
+ * Returns `{ url, hostname }` where `url` is the final public publisher URL
+ * and `hostname` is its normalized hostname (www-stripped, lowercased).
+ * Returns null if the chain fails, times out, exceeds the hop limit, or the
+ * final URL resolves to a private/internal address.
+ */
+export async function resolveGroundingUri(
+  rawUri: string,
+): Promise<{ url: string; hostname: string } | null> {
+  let current = rawUri;
+
+  for (let hop = 0; hop < GROUNDING_MAX_HOPS; hop++) {
+    // Scheme-check and credential-strip before every fetch.
+    let url: URL;
+    try {
+      url = new URL(current);
+    } catch {
+      return null;
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    url.username = "";
+    url.password = "";
+
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(),
+      GROUNDING_HOP_TIMEOUT_MS,
+    );
+    let res: Response;
+    try {
+      res = await fetch(url.toString(), {
+        method: "HEAD",
+        redirect: "manual",
+        signal: controller.signal,
+        headers: { "user-agent": "VerificakiBot/1.0 (+source-resolver)" },
+      });
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const status = res.status;
+
+    if (status >= 300 && status < 400) {
+      const location = res.headers.get("location");
+      if (!location) return null;
+      try {
+        current = new URL(location, url).toString();
+      } catch {
+        return null;
+      }
+      continue;
+    }
+
+    // 2xx, or "alive but auth/method-blocked" — treat as resolved.
+    if (
+      (status >= 200 && status < 300) ||
+      status === 401 ||
+      status === 403 ||
+      status === 405
+    ) {
+      // SSRF check on final URL only: DNS-resolve the hostname and reject any
+      // private/loopback/link-local address. Intermediate hops are not checked
+      // individually — Google's redirect service is the trusted initial source.
+      try {
+        await assertPublicHttpUrl(url.toString());
+      } catch {
+        return null;
+      }
+      const hostname = url.hostname.toLowerCase().replace(/^www\./, "");
+      return { url: url.toString(), hostname };
+    }
+
+    return null; // 404, 410, 5xx, etc.
+  }
+
+  return null; // exceeded hop limit
 }
 
 /** Runs `fn` over `items` with a bounded number of concurrent workers, preserving order. */
