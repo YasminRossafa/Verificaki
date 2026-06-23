@@ -373,38 +373,79 @@ export const verificarNoticia = createServerFn({ method: "POST" })
       contents = `${systemPrompt}\n\n${instrucao}`;
     }
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents,
-      // Google Search grounding. Incompatible with a structured responseSchema on
-      // this model, so the JSON contract is enforced via the prompt and parsed
-      // manually below.
-      config: { tools: [{ googleSearch: {} }] },
-    });
+    // Retry loop: Gemini's grounding may return Tier-3-only results on the first
+    // call. A second attempt uses a fresh Search query and often surfaces Tier 1/2
+    // sources. Cap at 2 total attempts; if still empty, return what we have.
+    const MAX_ATTEMPTS = 2;
+    let parsed: Record<string, unknown> = {};
+    let sources: VerificarSource[] = [];
 
-    const raw = response.text;
-    if (!raw) throw new Error("Empty response from Gemini");
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      let response: Awaited<ReturnType<typeof ai.models.generateContent>>;
+      try {
+        response = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents,
+          // Google Search grounding. Incompatible with a structured responseSchema on
+          // this model, so the JSON contract is enforced via the prompt and parsed
+          // manually below.
+          config: { tools: [{ googleSearch: {} }] },
+        });
+      } catch (err) {
+        if (attempt < MAX_ATTEMPTS - 1) {
+          console.warn(`[verificar] generateContent failed on attempt ${attempt + 1}, retrying...`, err);
+          continue;
+        }
+        throw err;
+      }
 
-    const parsed = extractJsonObject(raw);
+      const raw = response.text;
+      if (!raw) {
+        if (attempt < MAX_ATTEMPTS - 1) {
+          console.warn(`[verificar] empty response on attempt ${attempt + 1}, retrying...`);
+          continue;
+        }
+        throw new Error("Empty response from Gemini");
+      }
 
-    // Parse status FIRST. "SemTexto" is a sentinel (image had no readable text):
-    // short-circuit to the error condition WITHOUT running grounding resolution,
-    // liveness checks or scoring. This is distinct from "Inconclusivo", which is
-    // a legitimate verdict shown on the result screen.
-    const rawStatus = asString(parsed.status);
-    if (rawStatus === "SemTexto") {
-      throw new Error(
-        "SEM_TEXTO: a(s) imagem(ns) não contém texto legível para análise.",
-      );
+      let attemptParsed: Record<string, unknown>;
+      try {
+        attemptParsed = extractJsonObject(raw);
+      } catch (err) {
+        if (attempt < MAX_ATTEMPTS - 1) {
+          console.warn(`[verificar] malformed JSON on attempt ${attempt + 1}, retrying...`, err);
+          continue;
+        }
+        throw err;
+      }
+      parsed = attemptParsed;
+
+      // Parse status FIRST. "SemTexto" is a sentinel (image had no readable text):
+      // short-circuit to the error condition WITHOUT running grounding resolution,
+      // liveness checks or scoring. This is distinct from "Inconclusivo", which is
+      // a legitimate verdict shown on the result screen.
+      const rawStatus = asString(parsed.status);
+      if (rawStatus === "SemTexto") {
+        throw new Error(
+          "SEM_TEXTO: a(s) imagem(ns) não contém texto legível para análise.",
+        );
+      }
+
+      // Sources come from the grounding metadata (what Search actually retrieved),
+      // not from URLs the model writes free-form — this is what eliminates
+      // fabricated/dead links. Match each grounded URI to the Tier 1/2 allowlist,
+      // resolve+HEAD-check it (dropping Tier 3 and dead links), and tag its etapa.
+      // The model's free-form sources are passed as fallback: used to supplement
+      // when grounding yields fewer than 2 surviving sources.
+      sources = await buildSources(response, parsed.sources);
+
+      if (sources.length > 0) break;
+      if (attempt < MAX_ATTEMPTS - 1) {
+        console.warn(
+          `[verificar] no Tier 1/2 sources on attempt ${attempt + 1}, retrying...`,
+        );
+      }
     }
-
-    // Sources come from the grounding metadata (what Search actually retrieved),
-    // not from URLs the model writes free-form — this is what eliminates
-    // fabricated/dead links. Match each grounded URI to the Tier 1/2 allowlist,
-    // resolve+HEAD-check it (dropping Tier 3 and dead links), and tag its etapa.
-    // The model's free-form sources are passed as fallback: used to supplement
-    // when grounding yields fewer than 2 surviving sources.
-    const sources = await buildSources(response, parsed.sources);
 
     const rawScore = Math.round(Number(parsed.score));
     const scoreValid = Number.isFinite(rawScore);
@@ -412,9 +453,10 @@ export const verificarNoticia = createServerFn({ method: "POST" })
 
     // A malformed/missing score must never surface as a confident verdict
     // (without this, an unparseable score would read as 0 = "completely false").
+    const finalStatus = asString(parsed.status);
     const status: VerificarStatus =
-      scoreValid && VALID_STATUS.includes(rawStatus as VerificarStatus)
-        ? (rawStatus as VerificarStatus)
+      scoreValid && VALID_STATUS.includes(finalStatus as VerificarStatus)
+        ? (finalStatus as VerificarStatus)
         : "Inconclusivo";
 
     const rawEtapa = Number(parsed.etapaUtilizada);
